@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Duck Hunt (lite)</title>
+<link rel="stylesheet" href="../assets/styles.css">
+<style>
+  canvas{width:100%;max-width:900px;background:linear-gradient(#78c7ff,#b8e7ff 60%,#6dc86d 60%,#4aae54);
+         border-radius:12px;border:1px solid rgba(255,255,255,.08)}
+  .row{display:flex;gap:10px;flex-wrap:wrap;margin-top:8px}
+  .pill{padding:6px 10px;border:1px solid rgba(255,255,255,.12);border-radius:999px;background:var(--panel);color:var(--text)}
+</style>
+</head>
+<body>
+<div class="container">
+  <a class="btn" href="../index.html">← Назад</a>
+  <div class="card" style="margin-top:12px">
+    <h3>Duck Hunt (lite)</h3>
+    <p class="muted">Пули = кол-во уток в раунде. Кончились пули и хотя бы одна утка жива — проигрыш. Уток нет и пуль нет — новый раунд.</p>
+
+    <div class="row">
+      <button class="btn" id="startBtn">▶ Начать</button>
+      <button class="btn" id="restartBtn" disabled>↻ Рестарт</button>
+      <span class="pill">Очки: <b id="score">0</b></span>
+      <span class="pill">Раунд: <b id="round">1</b></span>
+      <span class="pill">Пули: <b id="ammo">0</b></span>
+      <span class="pill">Осталось уток (с очередью): <b id="remain">0</b></span>
+    </div>
+
+    <canvas id="c" width="900" height="520"></canvas>
+    <p class="muted">В 1-м раунде утки медленнее; с каждым раундом — быстрее. Утки появляются постепенно.</p>
+  </div>
+</div>
+
+<script>
+// ---------- UI ----------
+const c = document.getElementById('c'), x = c.getContext('2d');
+const startBtn = document.getElementById('startBtn');
+const restartBtn = document.getElementById('restartBtn');
+const scoreEl = document.getElementById('score');
+const roundEl = document.getElementById('round');
+const ammoEl  = document.getElementById('ammo');
+const remainEl= document.getElementById('remain');
+
+// ---------- Sound ----------
+const AC = window.AudioContext || window.webkitAudioContext; let actx=null;
+function ensureAudio(){ if(!actx) actx=new AC(); if(actx.state==='suspended'){ actx.resume().catch(()=>{});} }
+function sfxShot(){ try{ ensureAudio(); const t=actx.currentTime;
+  const o=actx.createOscillator(), g=actx.createGain();
+  o.type='square'; o.frequency.setValueAtTime(240,t); o.frequency.exponentialRampToValueAtTime(120,t+0.08);
+  g.gain.setValueAtTime(0.25,t); g.gain.exponentialRampToValueAtTime(0.001,t+0.09);
+  o.connect(g).connect(actx.destination); o.start(t); o.stop(t+0.1);
+}catch(e){}}
+function sfxQuack(){ try{ ensureAudio(); const t=actx.currentTime;
+  const o=actx.createOscillator(), g=actx.createGain();
+  o.type='sawtooth'; o.frequency.setValueAtTime(520,t); o.frequency.linearRampToValueAtTime(440,t+0.12);
+  g.gain.setValueAtTime(0.08,t); g.gain.exponentialRampToValueAtTime(0.001,t+0.18);
+  o.connect(g).connect(actx.destination); o.start(t); o.stop(t+0.2);
+}catch(e){}}
+function sfxDog(){ try{ ensureAudio(); const t=actx.currentTime;
+  const o=actx.createOscillator(), g=actx.createGain();
+  o.type='triangle'; o.frequency.setValueAtTime(180,t); o.frequency.linearRampToValueAtTime(140,t+0.2);
+  g.gain.setValueAtTime(0.12,t); g.gain.exponentialRampToValueAtTime(0.001,t+0.25);
+  o.connect(g).connect(actx.destination); o.start(t); o.stop(t+0.26);
+}catch(e){}}
+
+// ---------- Helpers ----------
+const R=(a,b)=>Math.random()*(b-a)+a;
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+
+// ---------- Game state ----------
+let ducks=[], dog=null, particles=[];
+let ammo=0, score=0, roundN=1, running=false, last=0, over=false;
+
+// квота/очередь на спавн
+let ducksPerRound=0, ducksToSpawn=0;
+let spawnT=0, spawnDelay=1.2;
+
+// скорость по раундам
+function speedMulForRound(r){ return 0.75 * Math.pow(1.08, r-1); }
+
+function setupRound(r){
+  roundN = r;
+  ducksPerRound = 5 + (r-1)*2;     // квота уток
+  ducksToSpawn  = ducksPerRound;   // очередь на спавн
+  ammo = ducksPerRound;            // патроны = утки
+  spawnDelay = Math.max(0.6, 1.2 - (r-1)*0.08);
+
+  roundEl.textContent = r;
+  ammoEl.textContent  = ammo;
+  remainEl.textContent= ducks.length + ducksToSpawn;
+}
+
+function reset(){
+  ducks.length=0; particles.length=0; dog=null;
+  score=0; over=false; running=false; last=0;
+  setupRound(1);
+  restartBtn.disabled=false;
+  draw();
+}
+
+function start(){
+  if(running) return;
+  running=true; last=performance.now(); over=false;
+
+  // мгновенный спавн 1–2 уток в начале
+  spawnDuck();
+  if(ducksToSpawn>0 && Math.random()<0.5) spawnDuck();
+
+  loop();
+}
+
+function nextRound(){
+  setupRound(roundN+1);
+  // мгновенно показать уток в начале раунда
+  spawnDuck();
+  if(ducksToSpawn>0 && Math.random()<0.5) spawnDuck();
+}
+
+// ---------- Entities ----------
+function spawnDuck(){
+  if(ducksToSpawn<=0) return;
+  ducksToSpawn--;
+
+  const side = Math.random()<0.5 ? -40 : c.width+40;
+  const y = R(120, c.height-180);
+
+  // базовые скорости — мягкие
+  let baseVX = side<0 ? R(1.6,2.2) : R(-2.2,-1.6);
+  let baseVY = R(-0.5,0.7);
+
+  const mul = speedMulForRound(roundN);
+  const vx = baseVX * mul;
+  const vy = baseVY * mul;
+
+  ducks.push({x:side,y, vx,vy, r:18, alive:true, t:0, flap:0, dir:Math.sign(vx), hit:false});
+  remainEl.textContent = ducks.length + ducksToSpawn;
+}
+
+function updateDuck(d,dt){
+  d.t+=dt; d.flap+=dt*12;
+  const sway = 1 + (roundN-1)*0.25;
+  d.vy += Math.sin(d.t*1.7)*0.01*sway;
+  d.x += d.vx;
+  d.y += d.vy;
+  if(d.y<80){ d.y=80; d.vy=Math.abs(d.vy)*0.8; }
+  if(d.y>c.height-160){ d.y=c.height-160; d.vy=-Math.abs(d.vy)*0.8; }
+  if(d.x<-100 || d.x>c.width+100) d.alive=false; // немного шире буфер
+}
+
+function drawDuck(d){
+  const flap = Math.sin(d.flap)>0?1:-1;
+  const body = d.r, head = d.r*0.6, wing = d.r*0.9*flap;
+  x.save(); x.translate(d.x,d.y); x.scale(d.dir,1);
+  x.fillStyle='#533'; x.beginPath(); x.ellipse(0,0,body,body*0.6,0,0,Math.PI*2); x.fill();
+  x.fillStyle='#633'; x.beginPath(); x.arc(body*0.8,-body*0.2, head, 0, Math.PI*2); x.fill();
+  x.fillStyle='#f2b705'; x.fillRect(body*1.2,-body*0.23, head*0.9, head*0.4);
+  x.fillStyle='#3b2'; x.beginPath(); x.ellipse(-body*0.2, -body*0.1+wing*0.15, body*0.7, body*0.35, 0, 0, Math.PI*2); x.fill();
+  if(d.hit){
+    x.strokeStyle='#fff'; x.lineWidth=2;
+    x.beginPath(); x.moveTo(-8,-8); x.lineTo(8,8); x.moveTo(-8,8); x.lineTo(8,-8); x.stroke();
+  }
+  x.restore();
+}
+
+function spawnDogFetch(px,py){ dog = {x:40, y:c.height-36, t:0, px, py, phase:0}; sfxDog(); }
+function updateDog(dt){
+  if(!dog) return;
+  dog.t += dt;
+  if(dog.phase===0){
+    dog.x += (dog.px - dog.x)*0.04;
+    if(Math.abs(dog.x - dog.px)<8){ dog.phase=1; dog.t=0; score++; scoreEl.textContent=score; sfxDog(); }
+  } else if(dog.phase===1){
+    if(dog.t>0.6){ dog.phase=2; dog.t=0; }
+  } else {
+    dog.x += (c.width+40 - dog.x)*0.03;
+    if(dog.x>c.width+30){ dog = null; }
+  }
+}
+
+// вспышки
+function muzzle(xp,yp){ particles.push({x:xp,y:yp,t:0,ttl:0.12}); }
+function updateParticles(dt){ particles = particles.filter(p=> (p.t+=dt) < p.ttl); }
+function drawParticles(){
+  particles.forEach(p=>{
+    const k = 1 - p.t/p.ttl;
+    const r = 14 + (1-k)*10;
+    const g = x.createRadialGradient(p.x,p.y,2,p.x,p.y,r);
+    g.addColorStop(0,'rgba(255,255,200,.9)'); g.addColorStop(1,'rgba(255,120,0,.0)');
+    x.fillStyle=g; x.beginPath(); x.arc(p.x,p.y,r,0,Math.PI*2); x.fill();
+  });
+}
+
+// ---------- Drawing ----------
+function drawBg(){
+  x.fillStyle='#2f9442';
+  for(let i=0;i<c.width;i+=80){
+    x.beginPath(); x.ellipse(i+R(20,60), c.height-30, R(30,60), R(12,24), 0, 0, Math.PI*2); x.fill();
+  }
+}
+function drawHUD(){
+  remainEl.textContent = ducks.length + ducksToSpawn;
+  x.fillStyle='#fff'; x.font='16px Inter';
+  x.fillText(`Раунд ${roundN}`, 16, 24);
+  x.fillText(`Очки ${score}`, 16, 44);
+  x.fillText(`Пули ${ammo}`, 16, 64);
+  x.fillText(`Осталось уток: ${ducks.length + ducksToSpawn}`, 16, 84);
+}
+
+function render(){
+  x.fillStyle='#78c7ff'; x.fillRect(0,0,c.width,c.height*0.6);
+  x.fillStyle='#6dc86d'; x.fillRect(0,c.height*0.6,c.width,c.height*0.4);
+  drawBg(); ducks.forEach(drawDuck); drawParticles(); updateDog(0); drawHUD();
+
+  if(over){
+    x.fillStyle='#0009'; x.fillRect(0,0,c.width,c.height);
+    x.fillStyle='#fff'; x.font='28px Inter';
+    x.fillText('Проигрыш! Нажми «Рестарт».', 20, 40);
+  }
+}
+
+// ---------- Loop ----------
+function loop(){
+  if(!running){ render(); return; }
+  const t=performance.now(); const dt=(t-last)/1000; last=t;
+
+  // спавн надёжно, даже при лаге
+  if(!over){
+    spawnT += dt;
+    while (spawnT > spawnDelay && ducksToSpawn > 0){
+      spawnT -= spawnDelay;
+      spawnDuck();
+    }
+  }
+
+  ducks.forEach(d=>updateDuck(d,dt));
+  ducks = ducks.filter(d=>d.alive);
+
+  updateDog(dt);
+  updateParticles(dt);
+
+  const remaining = ducks.length + ducksToSpawn;
+
+  if(ammo===0 && remaining>0 && !over){ over=true; running=false; render(); return; }
+  if(ammo===0 && remaining===0 && !dog){ nextRound(); }
+
+  render();
+  if(!over) requestAnimationFrame(loop);
+}
+
+// ---------- Shooting ----------
+c.addEventListener('mousedown', (e)=>{
+  if(over || !running || ammo<=0) return;
+  const rect=c.getBoundingClientRect(); const mx=e.clientX-rect.left, my=e.clientY-rect.top;
+  sfxShot(); muzzle(mx,my); ammo--; ammoEl.textContent=ammo;
+
+  let hit=-1, mind=1e9;
+  ducks.forEach((d,i)=>{ const d2=Math.hypot(d.x-mx,d.y-my); if(d2<mind){ mind=d2; hit=i; }});
+  if(hit>-1){
+    const d=ducks[hit];
+    if(Math.hypot(d.x-mx, d.y-my) < d.r*1.2){
+      d.hit=true; d.alive=false; sfxQuack(); spawnDogFetch(d.x, c.height-36);
+    }
+  }
+});
+
+// ---------- Buttons ----------
+startBtn.onclick=()=>{ startBtn.disabled=true; start(); };
+restartBtn.onclick=()=>{ startBtn.disabled=false; reset(); render(); };
+
+// init
+reset(); render();
+</script>
+</body>
+</html>

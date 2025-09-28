@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dodge — 1–2 игрока</title>
+<link rel="stylesheet" href="../assets/styles.css">
+<style>
+  .hudbar{display:flex;gap:12px;align-items:center;margin:8px 0;color:var(--muted);flex-wrap:wrap}
+  .pill{padding:6px 10px;border:1px solid rgba(255,255,255,.12);border-radius:999px;background:var(--panel);color:var(--text)}
+  .pill.badge{font-weight:600}
+  canvas{width:100%;max-width:900px;background:#0c1015;border-radius:12px;border:1px solid rgba(255,255,255,.08)}
+  .row{display:flex;gap:10px;flex-wrap:wrap}
+  .dead{filter:grayscale(.9) brightness(.7); opacity:.6}
+</style>
+</head>
+<body>
+<div class="container">
+  <a class="btn" href="../index.html">← Назад</a>
+  <div class="card" style="margin-top:12px">
+    <h3>Dodge — уворачивайся</h3>
+    <p class="muted">Режимы: 1 или 2 игрока. Игрок1 — WASD, Игрок2 — стрелки. Не врежься в препятствия!</p>
+    <div class="row">
+      <button class="btn" id="m1">1 игрок</button>
+      <button class="btn" id="m2">2 игрока</button>
+      <button class="btn" id="restart" disabled>↻ Рестарт</button>
+    </div>
+
+    <div class="hudbar">
+      <span class="pill badge" style="background:#234b2b">P1</span>
+      <span class="pill">⏱ Живёт: <b id="p1time">0.0</b> c</span>
+      <span class="pill">🏆 Рекорд: <b id="p1best">0.0</b> c</span>
+
+      <span id="p2hud" style="display:none;align-items:center;gap:12px" class="hudbar">
+        <span class="pill badge" style="background:#4b233f">P2</span>
+        <span class="pill">⏱ Живёт: <b id="p2time">0.0</b> c</span>
+        <span class="pill">🏆 Рекорд: <b id="p2best">0.0</b> c</span>
+      </span>
+
+      <span class="pill">🔺 Сложность: <b id="lvl">1</b></span>
+      <span class="pill">⚪ Снарядов: <b id="balls">0</b></span>
+    </div>
+
+    <canvas id="c" width="900" height="520"></canvas>
+    <p class="muted">Игра кончится только когда оба игрока выбыли. Рекорды сохраняются на этом устройстве.</p>
+  </div>
+</div>
+
+<script>
+const c = document.getElementById('c'), x = c.getContext('2d');
+const lvlEl   = document.getElementById('lvl');
+const ballsEl = document.getElementById('balls');
+const btn1 = document.getElementById('m1');
+const btn2 = document.getElementById('m2');
+const btnR = document.getElementById('restart');
+
+const p1TimeEl = document.getElementById('p1time');
+const p1BestEl = document.getElementById('p1best');
+const p2TimeEl = document.getElementById('p2time');
+const p2BestEl = document.getElementById('p2best');
+const p2Hud    = document.getElementById('p2hud');
+
+const K = {};
+addEventListener('keydown',e=>{K[e.key]=true;});
+addEventListener('keyup',e=>{K[e.key]=false;});
+
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const R=(a,b)=>Math.random()*(b-a)+a;
+
+let players=[], orbs=[], t0=0, running=false, two=false;
+// базовая скорость (пониженная ранее)
+let speed=1.9;
+let elapsed=0, level=1;
+
+const BEST_KEYS={p1:'dodge_p1_best', p2:'dodge_p2_best'};
+function getBest(key){ const v=+localStorage.getItem(key); return Number.isFinite(v)?v:0; }
+function setBest(key,val){ const cur=getBest(key); if(val>cur){ localStorage.setItem(key, String(val)); return val; } return cur; }
+
+function makePlayer(xp,color,keys,id){
+  return {id, x:xp, y:c.height-70, r:14, vx:0, vy:0, sp:4.2, col:color, keys, alive:true, time:0};
+}
+
+function reset(){
+  players.length=0;
+  players.push(makePlayer(c.width*0.33,'#6cc24a',{L:'a',R:'d',U:'w',D:'s'},'p1'));
+  if(two){
+    players.push(makePlayer(c.width*0.66,'#ff6aa2',{L:'ArrowLeft',R:'ArrowRight',U:'ArrowUp',D:'ArrowDown'},'p2'));
+    p2Hud.style.display='flex';
+  } else {
+    p2Hud.style.display='none';
+  }
+  orbs.length=0;
+  t0=performance.now(); elapsed=0; level=1;
+  running=true; btnR.disabled=false;
+
+  // показать рекорды
+  p1BestEl.textContent = getBest(BEST_KEYS.p1).toFixed(1);
+  p2BestEl.textContent = getBest(BEST_KEYS.p2).toFixed(1);
+  p1TimeEl.textContent = '0.0'; if(two) p2TimeEl.textContent='0.0';
+}
+function start(mode2){ two=mode2; reset(); loop(); }
+
+function spawnOrb(){
+  const type = Math.random()<0.75?'fall':'sweep';
+  if(type==='fall'){
+    orbs.push({
+      x:R(30,c.width-30), y:-20, r:R(8,18),
+      vx:R(-0.5,0.5),
+      vy:R(1.6,2.6)+level*0.10,
+      t:type
+    });
+  }else{
+    const side = Math.random()<0.5?0:1;
+    orbs.push({
+      x:side?c.width+20:-20, y:R(60,c.height-120), r:R(10,22),
+      vx:(side?-1:1)*(1.6+level*0.18),
+      vy:R(-0.25,0.25),
+      t:type
+    });
+  }
+}
+function collideCircle(a,b){ const dx=b.x-a.x, dy=b.y-a.y; return Math.hypot(dx,dy) < a.r+b.r; }
+
+// --- коллизия между игроками (нельзя проходить сквозь) ---
+function resolvePlayers(){
+  if(players.length<2) return;
+  const a=players[0], b=players[1];
+  if(!a.alive || !b.alive) return;
+  let dx=b.x-a.x, dy=b.y-a.y, dist=Math.hypot(dx,dy);
+  const minDist=a.r+b.r+1;
+  if(dist===0){ dx=1; dy=0; dist=1; }
+  if(dist<minDist){
+    const overlap=minDist-dist, nx=dx/dist, ny=dy/dist;
+    a.x -= nx*overlap/2; a.y -= ny*overlap/2;
+    b.x += nx*overlap/2; b.y += ny*overlap/2;
+    [a,b].forEach(p=>{
+      p.x = clamp(p.x, p.r, c.width - p.r);
+      p.y = clamp(p.y, p.r, c.height - p.r);
+    });
+  }
+}
+
+function draw(){
+  x.fillStyle='#0c1015'; x.fillRect(0,0,c.width,c.height);
+
+  // grid faint
+  x.globalAlpha=0.06; x.strokeStyle='#fff'; x.lineWidth=1;
+  for(let i=0;i<c.width;i+=40){ x.beginPath(); x.moveTo(i,0); x.lineTo(i,c.height); x.stroke(); }
+  for(let j=0;j<c.height;j+=40){ x.beginPath(); x.moveTo(0,j); x.lineTo(c.width,j); x.stroke(); }
+  x.globalAlpha=1;
+
+  // orbs
+  orbs.forEach(o=>{
+    const g=x.createRadialGradient(o.x,o.y,2,o.x,o.y,o.r);
+    g.addColorStop(0,'#ffd966'); g.addColorStop(1,'#d24b00');
+    x.fillStyle=g; x.beginPath(); x.arc(o.x,o.y,o.r,0,Math.PI*2); x.fill();
+  });
+
+  // players
+  players.forEach(p=>{
+    x.save();
+    if(!p.alive) x.globalAlpha=0.5;
+    x.fillStyle=p.col; x.beginPath(); x.arc(p.x,p.y,p.r,0,Math.PI*2); x.fill();
+    x.fillStyle='#0008'; x.fillRect(p.x-12,p.y+p.r+6,24,4);
+    x.restore();
+  });
+
+  // если оба выбыли — баннер
+  if(players.every(p=>!p.alive)){
+    x.fillStyle='#fff'; x.font='24px Inter';
+    x.fillText('Оба игрока выбыли! Нажми «Рестарт».', 20, 34);
+  }
+}
+
+function update(dt){
+  // сложность и спавн
+  elapsed += dt;
+  level = 1 + Math.floor(elapsed/10);
+  lvlEl.textContent = level;
+  const want = Math.min(14, 4 + Math.floor(elapsed/2));
+  while(orbs.length < want) spawnOrb();
+  ballsEl.textContent = orbs.length;
+
+  // движение живых игроков
+  players.forEach(p=>{
+    if(!p.alive) return;
+    const k=p.keys;
+    p.vx = (K[k.R]?1:0) - (K[k.L]?1:0);
+    p.vy = (K[k.D]?1:0) - (K[k.U]?1:0);
+    const m=Math.hypot(p.vx,p.vy)||1;
+    p.x = clamp(p.x + (p.vx/m)*p.sp, p.r, c.width-p.r);
+    p.y = clamp(p.y + (p.vy/m)*p.sp, p.r, c.height-p.r);
+    p.time += dt; // наращиваем личное время
+  });
+
+  // запрет прохождения друг сквозь друга
+  resolvePlayers();
+
+  // движение снарядов
+  orbs.forEach(o=>{ o.x+=o.vx*speed; o.y+=o.vy*speed; });
+  orbs = orbs.filter(o=>o.x>-40 && o.x<c.width+40 && o.y<c.height+40);
+
+  // проверки столкновений с шарами — убиваем только конкретного игрока
+  for(const p of players){
+    if(!p.alive) continue;
+    for(const o of orbs){
+      if(collideCircle(p,o)){ 
+        p.alive=false; // только этот игрок выбывает
+        // записать рекорд
+        const key = p.id==='p1'?BEST_KEYS.p1:BEST_KEYS.p2;
+        const newBest = setBest(key, p.time);
+        if(p.id==='p1'){ p1BestEl.textContent=newBest.toFixed(1); }
+        else { p2BestEl.textContent=newBest.toFixed(1); }
+        break;
+      }
+    }
+  }
+
+  // если оба мертвы — стоп игра, ждём рестарт
+  if(players.every(p=>!p.alive)){
+    running=false;
+  }
+
+  // UI таймеры
+  const p1=players[0]; p1TimeEl.textContent=(p1.time).toFixed(1);
+  if(two){
+    const p2=players[1]; p2TimeEl.textContent=(p2.time).toFixed(1);
+  }
+}
+
+function loop(){
+  if(!running){
+    draw();
+    return;
+  }
+  const t=performance.now(), dt=(t-t0)/1000; t0=t;
+  update(dt); draw();
+  requestAnimationFrame(loop);
+}
+
+btn1.onclick=()=>start(false);
+btn2.onclick=()=>start(true);
+btnR.onclick=()=>{ reset(); draw(); };
+
+// начальная статичная сцена
+p1BestEl.textContent = getBest(BEST_KEYS.p1).toFixed(1);
+p2BestEl.textContent = getBest(BEST_KEYS.p2).toFixed(1);
+</script>
+</body>
+</html>

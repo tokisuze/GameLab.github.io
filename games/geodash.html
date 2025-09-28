@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GeoDash — mini (slow, stable)</title>
+<style>
+  :root{color-scheme:dark;--bg:#0b0f14;--panel:#121821;--text:#e6e7ea;--muted:#8a93a5;--acc:#6ee7ff}
+  body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,Segoe UI,Inter,Arial}
+  .wrap{max-width:1100px;margin:24px auto;padding:0 16px}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  .btn{background:#222b36;border:1px solid #2f3b49;border-radius:12px;padding:8px 12px;color:#fff;cursor:pointer}
+  .btn:disabled{opacity:.5;cursor:not-allowed}
+  .pill{padding:6px 10px;border:1px solid #2f3b49;border-radius:999px;background:#121821;color:#dfe4ee}
+  canvas{width:100%;max-width:1000px;aspect-ratio:16/9;background:#0b0f14;border:1px solid #2f3b49;border-radius:12px;display:block}
+  .muted{color:var(--muted)}
+  .title{font-weight:700;font-size:18px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="row" style="margin-bottom:8px">
+    <span class="title">GeoDash — mini</span>
+    <button class="btn" id="startBtn">▶ Старт</button>
+    <button class="btn" id="restartBtn" disabled>↻ Рестарт</button>
+    <select class="btn" id="diffSel" title="Сложность">
+      <option value="0" selected>Легко</option>
+      <option value="1">Норм</option>
+      <option value="2">Хард</option>
+    </select>
+    <span class="pill">🏁 Прогресс: <b id="prog">0%</b></span>
+    <span class="pill">📏 Дистанция: <b id="dist">0</b> м</span>
+    <span class="pill">⭐ Рекорд: <b id="best">0</b> м</span>
+    <span class="pill">🧪 Попытка: <b id="tries">1</b></span>
+  </div>
+  <canvas id="c" width="1280" height="720"></canvas>
+  <p class="muted">Пробел/ЛКМ/тап — прыжок. Есть «койот-тайм» и буфер прыжка. Версия замедлена.</p>
+</div>
+
+<script>
+/* === Canvas & UI === */
+const c=document.getElementById('c'), x=c.getContext('2d');
+const UI={prog:ge('prog'), dist:ge('dist'), best:ge('best'), tries:ge('tries')};
+const btnStart=ge('startBtn'), btnRestart=ge('restartBtn'), diffSel=ge('diffSel');
+function ge(id){return document.getElementById(id);}
+
+/* === RNG === */
+let seed=1234567;
+function rnd(){ seed^=seed<<13; seed^=seed>>>17; seed^=seed<<5; return (seed>>>0)/4294967296; }
+function R(a,b){return a + rnd()*(b-a)|0;}
+
+/* === World (slow tuning) === */
+const W={w:c.width,h:c.height, groundY: c.height-110, segs:[], spikes:[], gaps:[], cam:0, len: 2500,
+          speed: 5.0, grav: 0.55, jumpV: 13.3, maxSpeed: 9.0};
+let running=false, last=0, finished=false, dead=false, tries=1, best=0;
+
+/* === Player === */
+const P={x:140, y:0, w:38, h:38, vx:0, vy:0, onGround:false, coyote:0, jumpBuf:0};
+const COYOTE=0.10, JUMP_BUF=0.14;
+
+/* === Input === */
+let wantJump=false;
+addEventListener('keydown',e=>{ if(e.code==='Space'||e.key===' '){ e.preventDefault(); queueJump(); }});
+addEventListener('mousedown',()=>queueJump());
+addEventListener('touchstart',e=>{ e.preventDefault(); queueJump(); },{passive:false});
+function queueJump(){ wantJump=true; }
+
+/* === Level Gen === */
+function resetSeed(){ seed = 0xC0FFEE ^ (tries*7919); }
+function buildLevel(diff=0){
+  W.segs.length=0; W.spikes.length=0; W.gaps.length=0; W.cam=0; finished=false; dead=false;
+
+  const baseSpeed=[4.0,5.2,6.6][diff|0];
+  const maxSpeed=[7.2,8.6,10.2][diff|0];
+  const density=[0.7,0.9,1.1][diff|0];
+  W.speed=baseSpeed; W.maxSpeed=maxSpeed;
+
+  W.segs.push({x:0,y:W.groundY,w:1000,h:200});
+  let xPos=900;
+
+  while(xPos < W.len*10){
+    const pick=rnd();
+    if(pick<0.40*density){
+      const w=R(90,180), h=R(40,110), y=W.groundY-h;
+      W.segs.push({x:xPos,y:y,w,h});
+      xPos += w + R(90,180);
+    }else if(pick<0.68*density){
+      const count = 1 + (rnd()<0.35 ? 1:0);
+      for(let i=0;i<count;i++){ const size=R(36,56); W.spikes.push({x:xPos+i*size,y:W.groundY, s:size}); }
+      xPos += count*56 + R(100,200);
+    }else{
+      const gapW = R(80,140);
+      W.gaps.push({x:xPos, w:gapW});
+      xPos += gapW + R(150,260);
+    }
+    W.speed = Math.min(W.maxSpeed, W.speed + 0.008);
+  }
+}
+
+/* === Collisions/helpers === */
+function pointInTri(px,py, t){
+  const {x1,y1,x2,y2,x3,y3}=t;
+  const dX=px-x3, dY=py-y3;
+  const dX21=x2-x1, dY12=y1-y2, D=dY12*(x3-x1)+dX21*(y3-y1);
+  const s=dY12*dX + dX21*dY + D;
+  const t2=(y3-y1)*dX + (x1-x3)*dY + D;
+  if (D<0) return s<=0 && t2<=0 && s+t2>=D;
+  return s>=0 && t2>=0 && s+t2<=D;
+}
+function playerHitsSpike(){
+  const corners=[{x:P.x,y:P.y},{x:P.x+P.w,y:P.y},{x:P.x,y:P.y+P.h},{x:P.x+P.w,y:P.y+P.h}];
+  for(const s of W.spikes){
+    const sx=s.x - W.cam;
+    if(sx+s.s< -50 || sx>c.width+50) continue;
+    const t={x1:sx, y1:s.y, x2:sx+s.s*0.5, y2:s.y-s.s, x3:sx+s.s, y3:s.y};
+    for(const p of corners){ if(pointInTri(p.x,p.y,t)) return true; }
+    if(P.y+P.h> s.y-4 && P.x+P.w> sx+6 && P.x< sx+s.s-6) return true;
+  }
+  return false;
+}
+/* земля твёрдая, кроме участков gaps */
+function inGapAt(x1, x2){
+  for (const g of W.gaps){
+    const gx1=g.x - W.cam, gx2=gx1 + g.w;
+    if (x2 > gx1 && x1 < gx2) return true;
+  }
+  return false;
+}
+
+/* === Game Loop === */
+function startGame(){
+  resetSeed(); buildLevel(+diffSel.value);
+  P.x=140; P.y=W.groundY-P.h; P.vx=0; P.vy=0; P.onGround=true; P.coyote=0; P.jumpBuf=0;
+  W.cam=0; running=true; finished=false; dead=false; last=performance.now();
+  btnRestart.disabled=false; UI.tries.textContent=tries; requestAnimationFrame(loop);
+}
+function die(){ if(dead) return; dead=true; running=false; best=Math.max(best,getMeters()); UI.best.textContent=best; }
+function finish(){ if(finished) return; finished=true; running=false; best=Math.max(best,getMeters()); UI.best.textContent=best; }
+function restart(){ tries++; UI.tries.textContent=tries; startGame(); }
+
+function getMeters(){ return Math.max(0, Math.floor((W.cam)/10)); }
+function progress(){ return Math.min(100, Math.floor( (W.cam/(W.len*10))*100 )); }
+
+function loop(){
+  if(!running){ render(); return; }
+  const t=performance.now(), dt=Math.min(0.032,(t-last)/1000); last=t;
+  update(dt); render();
+  if(running) requestAnimationFrame(loop);
+}
+
+/* === Update === */
+function update(dt){
+  W.cam += W.speed;
+
+  // физика
+  P.vy += W.grav; P.y += P.vy;
+
+  // буфер/койот
+  if(wantJump){ P.jumpBuf = JUMP_BUF; wantJump=false; } else if(P.jumpBuf>0) P.jumpBuf -= dt;
+  if(P.onGround) P.coyote = COYOTE; else if(P.coyote>0) P.coyote -= dt;
+
+  // столкновения с платформами: посадка сверху И смерть от бока/низа
+  P.onGround=false;
+  const prevY = P.y - P.vy;
+  for (const s0 of W.segs){
+    const s={x:s0.x - W.cam, y:s0.y, w:s0.w, h:s0.h};
+    if (s.x + s.w < -120 || s.x > c.width + 120) continue;
+
+    const px1=P.x, px2=P.x+P.w, sx1=s.x, sx2=s.x+s.w;
+    const horiz = (px2 > sx1 + 2) && (px1 < sx2 - 2);
+    const wasAbove = (prevY + P.h) <= s.y + 1;
+    const crossed  = (P.y + P.h) >= s.y;
+    const falling  = P.vy >= -0.1;
+
+    // безопасная посадка сверху
+    if (horiz && wasAbove && crossed && falling){
+      P.y = s.y - P.h; P.vy = 0; P.onGround = true;
+      continue;
+    }
+
+    // любое другое пересечение прямоугольника (бок/низ) — смерть
+    const overlapY = (P.y + P.h) > s.y + 1 && P.y < s.y + s.h - 1;
+    if (horiz && overlapY){
+      die(); return;
+    }
+  }
+
+  // твёрдая земля (кроме дыр)
+  if (!P.onGround && P.vy >= 0){
+    const px1=P.x, px2=P.x+P.w;
+    if (!inGapAt(px1, px2) && (P.y + P.h) >= W.groundY){
+      P.y = W.groundY - P.h; P.vy = 0; P.onGround = true;
+    }
+  }
+
+  // смерть в яме/на шипах
+  if(P.y > W.groundY + 100){ die(); return; }
+  if(playerHitsSpike()){ die(); return; }
+
+  // прыжок
+  if(P.jumpBuf>0 && (P.onGround || P.coyote>0)){
+    P.vy = -W.jumpV; P.onGround=false; P.coyote=0; P.jumpBuf=0;
+  }
+
+  // финиш
+  if(W.cam >= W.len*10) finish();
+
+  // UI
+  UI.prog.textContent = progress() + '%';
+  UI.dist.textContent = getMeters();
+}
+
+/* === Render === */
+function render(){
+  x.fillStyle='#0b0f14'; x.fillRect(0,0,c.width,c.height);
+
+  // параллакс
+  x.globalAlpha=0.07; x.strokeStyle='#fff';
+  for(let i=0;i<6;i++){ const offs=(W.cam*0.14*i)%80; x.beginPath(); x.moveTo(-offs,120+i*70); x.lineTo(c.width,120+i*70); x.stroke(); }
+  x.globalAlpha=1;
+
+  const cam=W.cam;
+
+  // земля
+  x.fillStyle='#0f1420'; x.fillRect(0, W.groundY, c.width, c.height - W.groundY);
+
+  // платформы
+  x.fillStyle='#192233';
+  for(const s of W.segs){
+    const sx=s.x - cam; if(sx+s.w< -50 || sx>c.width+50) continue;
+    x.fillRect(sx, s.y, s.w, s.h);
+  }
+
+  // ямы
+  x.fillStyle='#0b0f14';
+  for(const g of W.gaps){
+    const gx=g.x - cam; if(gx+g.w< -50 || gx>c.width+50) continue;
+    x.fillRect(gx, W.groundY, g.w, c.height-W.groundY);
+  }
+
+  // шипы
+  for(const s of W.spikes){
+    const sx=s.x - cam; if(sx+s.s< -50 || sx>c.width+50) continue;
+    x.fillStyle='#253147'; x.beginPath();
+    x.moveTo(sx, W.groundY);
+    x.lineTo(sx + s.s*0.5, W.groundY - s.s);
+    x.lineTo(sx + s.s, W.groundY);
+    x.closePath(); x.fill();
+    x.strokeStyle='#35425b'; x.stroke();
+  }
+
+  // игрок
+  x.save(); x.translate(P.x,P.y);
+  x.fillStyle=dead?'#b33939':finished?'#2ecc71':'#62d26f';
+  x.fillRect(0,0,P.w,P.h);
+  x.fillStyle='#000'; x.fillRect(P.w*0.65, P.h*0.25, 6, 6); x.fillRect(P.w*0.45, P.h*0.25, 6, 6);
+  x.restore();
+
+  // прогресс-бар
+  const p=progress()/100;
+  x.fillStyle='#1f2a3c'; x.fillRect(20,20,c.width-40,10);
+  x.fillStyle='var(--acc)'; x.fillRect(20,20,(c.width-40)*p,10);
+  x.strokeStyle='#2f3b49'; x.strokeRect(20.5,20.5,c.width-41,9);
+
+  // оверлеи
+  if(dead){ overlay('Ты разбился! Нажми «Рестарт».'); }
+  else if(finished){ overlay('GG! Уровень пройден 🎉'); }
+  else if(!running){ overlay('Нажми «Старт», чтобы играть'); }
+}
+function overlay(txt){
+  x.fillStyle='#0009'; x.fillRect(0,0,c.width,c.height);
+  x.fillStyle='#fff'; x.font='28px system-ui,Segoe UI,Inter,Arial';
+  x.fillText(txt, 24, 56);
+}
+
+/* === UI === */
+btnStart.onclick=()=>{ btnStart.disabled=true; startGame(); };
+btnRestart.onclick=()=>{ restart(); };
+diffSel.onchange=()=>{ /* применится со следующей попытки */ };
+
+(function boot(){
+  try{
+    resetSeed(); buildLevel(+diffSel.value);
+    P.y=W.groundY-P.h;
+    UI.tries.textContent=tries; UI.best.textContent=best;
+    render();
+  }catch(e){ console.error(e); alert('Ошибка: '+e.message); }
+})();
+</script>
+</body>
+</html>

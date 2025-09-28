@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mini DOOM — standalone</title>
+<style>
+  :root{color-scheme:dark;--bg:#0b0f14;--panel:#121821;--text:#e6e7ea;--muted:#8a93a5}
+  body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,Segoe UI,Inter,Arial}
+  .wrap{max-width:1100px;margin:24px auto;padding:0 16px}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  .btn{background:#222b36;border:1px solid #2f3b49;border-radius:12px;padding:8px 12px;color:#fff;cursor:pointer}
+  .btn:disabled{opacity:.5;cursor:not-allowed}
+  .pill{padding:6px 10px;border:1px solid #2f3b49;border-radius:999px;background:#121821;color:#dfe4ee}
+  canvas{width:100%;max-width:1000px;aspect-ratio:5/3;background:#0b0f14;border:1px solid #2f3b49;border-radius:12px;display:block}
+  .muted{color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="row" style="margin-bottom:10px">
+    <button class="btn" id="startBtn">▶ Старт</button>
+    <button class="btn" id="restartBtn" disabled>↻ Рестарт</button>
+    <span class="pill">❤️ HP: <b id="hp">100</b></span>
+    <span class="pill">🔫 Патроны: <b id="ammo">12</b> / <b id="pool">48</b></span>
+    <span class="pill">👿 Убито: <b id="frags">0</b></span>
+    <span class="pill">🕳 Уровень: <b id="stage">1</b></span>
+    <span class="pill" id="hint" style="display:none">🌀 Портал открыт!</span>
+  </div>
+  <canvas id="c" width="1000" height="600"></canvas>
+  <p class="muted">WASD — движение, мышь — прицел, ЛКМ — огонь, R — перезарядка, Shift — ускорение.</p>
+</div>
+
+<script>
+/* ===== Canvas & UI ===== */
+const c=document.getElementById('c'), x=c.getContext('2d');
+const UI={
+  hp:document.getElementById('hp'),
+  ammo:document.getElementById('ammo'),
+  pool:document.getElementById('pool'),
+  frags:document.getElementById('frags'),
+  stage:document.getElementById('stage'),
+  hint:document.getElementById('hint')
+};
+const btnStart=document.getElementById('startBtn');
+const btnRestart=document.getElementById('restartBtn');
+
+/* ===== Баланс ===== */
+const ENEMY_DAMAGE_BASE = 30;      // базовый урон от врага
+const ENEMY_DAMAGE_PER_STAGE = 4;  // прибавка урона за уровень
+
+/* ===== Input ===== */
+const K={}; let mouse={x:c.width/2,y:c.height/2,down:false};
+addEventListener('keydown',e=>{K[e.key.toLowerCase()]=true;});
+addEventListener('keyup',e=>{K[e.key.toLowerCase()]=false;});
+c.addEventListener('mousemove',e=>{const r=c.getBoundingClientRect(); mouse.x=e.clientX-r.left; mouse.y=e.clientY-r.top;});
+c.addEventListener('mousedown',()=>mouse.down=true);
+addEventListener('mouseup',()=>mouse.down=false);
+
+/* ===== Helpers ===== */
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const R=(a,b)=>Math.random()*(b-a)+a;
+
+/* ===== State ===== */
+const W={w:c.width,h:c.height,walls:[],pickups:[],enemies:[],bullets:[],portal:null,parts:[]};
+let player, running=false, last=0, frags=0, stage=1, hintTimer=0;
+
+/* ===== SFX ===== */
+const AC=window.AudioContext||window.webkitAudioContext; let actx=null;
+function ensureAudio(){ if(!actx) actx=new AC(); if(actx.state==='suspended') actx.resume().catch(()=>{}); }
+function sfxShot(){ try{ ensureAudio(); const t=actx.currentTime;
+  const o=actx.createOscillator(), g=actx.createGain();
+  o.type='square'; o.frequency.setValueAtTime(340,t); o.frequency.exponentialRampToValueAtTime(160,t+0.08);
+  g.gain.setValueAtTime(0.22,t); g.gain.exponentialRampToValueAtTime(0.001,t+0.1);
+  o.connect(g).connect(actx.destination); o.start(t); o.stop(t+0.1);}catch(e){}}
+function sfxHit(){ try{ ensureAudio(); const t=actx.currentTime;
+  const n=actx.createBuffer(1,actx.sampleRate*0.06,actx.sampleRate);
+  const d=n.getChannelData(0); for(let i=0;i<d.length;i++) d[i]=(Math.random()*2-1)*(1-i/d.length);
+  const s=actx.createBufferSource(); const g=actx.createGain(); g.gain.value=0.2; s.buffer=n; s.connect(g).connect(actx.destination);
+  s.start(t); s.stop(t+0.06);}catch(e){}}
+function sfxPortal(){ try{ ensureAudio(); const t=actx.currentTime;
+  const o=actx.createOscillator(), g=actx.createGain();
+  o.type='triangle'; o.frequency.setValueAtTime(420,t); o.frequency.exponentialRampToValueAtTime(660,t+0.25);
+  g.gain.setValueAtTime(0.15,t); g.gain.exponentialRampToValueAtTime(0.001,t+0.35);
+  o.connect(g).connect(actx.destination); o.start(t); o.stop(t+0.36);}catch(e){}}
+
+/* ===== Collisions ===== */
+function circleRect(px,py,pr, r){ const cx=clamp(px,r.x,r.x+r.w), cy=clamp(py,r.y,r.y+r.h); const dx=px-cx, dy=py-cy; return dx*dx+dy*dy<pr*pr; }
+function collideWalls(x0,y0,r){ for(const w of W.walls){ if(circleRect(x0,y0,r,w)) return true; } return false; }
+function overlapsEnemy(x0,y0,r){ for(const e of W.enemies){ if(!e.dead && Math.hypot(e.x-x0,e.y-y0)<e.r+r+4) return true; } return false; }
+function freeSpot(r){
+  for(let i=0;i<200;i++){
+    const x=R(40,W.w-40), y=R(60,W.h-80);
+    if(!collideWalls(x,y,r) && !overlapsEnemy(x,y,r)) return {x,y};
+  }
+  return {x:W.w*0.5+R(-60,60), y:W.h*0.5+R(-60,60)};
+}
+function moveWithWalls(o,vx,vy){
+  o.x+=vx; for(const w of W.walls){ if(circleRect(o.x,o.y,o.r,w)){ o.x-=vx; while(!circleRect(o.x+(vx>0?1:-1),o.y,o.r,w)) o.x+=(vx>0?1:-1); break; } }
+  o.y+=vy; for(const w of W.walls){ if(circleRect(o.x,o.y,o.r,w)){ o.y-=vy; while(!circleRect(o.x,o.y+(vy>0?1:-1),o.r,w)) o.y+=(vy>0?1:-1); break; } }
+}
+
+/* ===== Particles ===== */
+function puff(xp,yp,col='#ffb'){ W.parts.push({x:xp,y:yp,t:0,ttl:.25,col}); }
+function drawParts(dt){
+  W.parts=W.parts.filter(p=> (p.t+=dt)<p.ttl);
+  for(const p of W.parts){
+    const k=1-p.t/p.ttl, r=10+(1-k)*14;
+    const g=x.createRadialGradient(p.x,p.y,2,p.x,p.y,r);
+    g.addColorStop(0, p.col==='blood'?'rgba(255,60,60,.9)':'rgba(255,240,180,.9)');
+    g.addColorStop(1, 'rgba(255,120,0,0)');
+    x.fillStyle=g; x.beginPath(); x.arc(p.x,p.y,r,0,Math.PI*2); x.fill();
+  }
+}
+
+/* ===== World build ===== */
+function resetPlayer(){ player={x:W.w/2,y:W.h-80,r:14,hp:100,sp:3.2,ammo:12,ammoMax:12,ammoPool:48,reload:0}; }
+function makeArena(){
+  W.walls.length=0; W.pickups.length=0; W.enemies.length=0; W.bullets.length=0; W.parts.length=0; W.portal=null;
+  // рамка
+  W.walls.push({x:0,y:0,w:W.w,h:16},{x:0,y:W.h-16,w:W.w,h:16},{x:0,y:0,w:16,h:W.h},{x:W.w-16,y:0,w:16,h:W.h});
+  // блоки
+  for(let i=0;i<6;i++){ const bw=R(120,220), bh=R(40,120), x0=R(60,W.w-bw-60), y0=R(80,W.h-bh-120); W.walls.push({x:x0,y:y0,w:bw,h:bh}); }
+  // лут
+  for(let i=0;i<3;i++) W.pickups.push({x:R(80,W.w-80),y:R(80,W.h-120),t:'hp',r:10,val:25});
+  for(let i=0;i<3;i++) W.pickups.push({x:R(80,W.w-80),y:R(80,W.h-120),t:'ammo',r:10,val:12});
+  // враги
+  const n=5+stage*2; for(let i=0;i<n;i++) spawnEnemy();
+}
+function spawnEnemy(){
+  const e={x:0,y:0,r:13,hp:24+stage*6,sp:1.2+stage*0.12,dead:false,kx:0,ky:0};
+  const p=freeSpot(e.r); e.x=p.x; e.y=p.y; W.enemies.push(e);
+}
+function openPortal(){
+  const p=freeSpot(18); W.portal={x:p.x,y:80,r:18,t:0};
+  UI.hint.style.display='inline-block'; hintTimer=2; sfxPortal();
+}
+
+/* ===== Separation: enemies vs enemies ===== */
+function separateEnemies(){
+  for (let i=0; i<W.enemies.length; i++){
+    const a=W.enemies[i]; if(a.dead) continue;
+    for (let j=i+1; j<W.enemies.length; j++){
+      const b=W.enemies[j]; if(b.dead) continue;
+      const dx=b.x-a.x, dy=b.y-a.y; let d=Math.hypot(dx,dy)||0.0001;
+      const minD=a.r+b.r+2;
+      if(d<minD){
+        const nx=dx/d, ny=dy/d, push=(minD-d)/2;
+        moveWithWalls(a, -nx*push, -ny*push);
+        moveWithWalls(b,  nx*push,  ny*push);
+        if('kx' in a){ a.kx -= nx*0.4; a.ky -= ny*0.4; }
+        if('kx' in b){ b.kx += nx*0.4; b.ky += ny*0.4; }
+      }
+    }
+  }
+}
+
+/* ===== Game Loop ===== */
+function startGame(){ resetPlayer(); makeArena(); frags=0; running=true; last=performance.now(); btnRestart.disabled=false; requestAnimationFrame(loop); }
+function nextStage(){
+  stage++; UI.stage.textContent=stage;
+  resetPlayer(); makeArena();
+  running=true; last=performance.now();
+  requestAnimationFrame(loop);
+}
+function loop(){ if(!running){ render(0); return; } const t=performance.now(), dt=(t-last)/1000; last=t; update(dt); render(dt); if(running) requestAnimationFrame(loop); }
+
+/* ===== Update ===== */
+function update(dt){
+  if(hintTimer>0){ hintTimer-=dt; if(hintTimer<=0) UI.hint.style.display='none'; }
+
+  // движение игрока
+  const a=(K['a']||K['ф'])?1:0, d=(K['d']||K['в'])?1:0, w=(K['w']||K['ц'])?1:0, s=(K['s']||K['ы'])?1:0;
+  let vx=(d-a), vy=(s-w); const L=Math.hypot(vx,vy)||1; vx/=L; vy/=L;
+  let sp=player.sp*(K['shift']?1.7:1); moveWithWalls(player,vx*sp,vy*sp);
+
+  // перезарядка
+  if(K['r']&&player.reload<=0&&player.ammo<player.ammoMax&&player.ammoPool>0){ player.reload=0.7; }
+  if(player.reload>0){ player.reload-=dt; if(player.reload<=0){ const need=player.ammoMax-player.ammo, take=Math.min(need,player.ammoPool); player.ammo+=take; player.ammoPool-=take; } }
+
+  // стрельба
+  if(mouse.down && player.reload<=0 && player.ammo>0){ shoot(); }
+
+  // пули
+  for(const b of W.bullets){
+    b.x+=b.vx; b.y+=b.vy;
+    let hit=false; for(const w of W.walls){ if(circleRect(b.x,b.y,3,w)){ hit=true; break; } }
+    if(hit){ b.dead=true; puff(b.x,b.y); continue; }
+    for(const e of W.enemies){
+      if(e.dead) continue;
+      if(Math.hypot(b.x-e.x,b.y-e.y)<e.r+3){
+        e.hp-=b.dmg; b.dead=true; puff(b.x,b.y,'blood'); sfxHit();
+        const dx=e.x-b.x,dy=e.y-b.y,LL=Math.hypot(dx,dy)||1; e.kx+=(dx/LL)*2; e.ky+=(dy/LL)*2;
+        if(e.hp<=0){ e.dead=true; frags++; UI.frags.textContent=frags; }
+        break;
+      }
+    }
+  }
+  W.bullets=W.bullets.filter(b=>!b.dead && b.x>-10 && b.x<W.w+10 && b.y>-10 && b.y<W.h+10);
+
+  // враги
+  for(const e of W.enemies){
+    if(e.dead) continue;
+    const dx=player.x-e.x, dy=player.y-e.y, L2=Math.hypot(dx,dy)||1;
+    let ex=dx/L2*e.sp + e.kx, ey=dy/L2*e.sp + e.ky; e.kx*=0.85; e.ky*=0.85;
+    moveWithWalls(e,ex,ey);
+    const dnow=Math.hypot(player.x-e.x,player.y-e.y), minD=player.r+e.r+2;
+    if(dnow<minD){
+      const nx=(e.x-player.x)/(dnow||1), ny=(e.y-player.y)/(dnow||1), push=(minD-dnow)*0.6;
+      moveWithWalls(e,nx*push,ny*push); moveWithWalls(player,-nx*push*0.2,-ny*push*0.2);
+      // урон от врагов
+      player.hp -= (ENEMY_DAMAGE_BASE + ENEMY_DAMAGE_PER_STAGE*stage) * dt;
+    }
+  }
+  separateEnemies();
+  W.enemies=W.enemies.filter(e=>!e.dead);
+
+  // лут
+  for(const p of W.pickups){
+    if(Math.hypot(p.x-player.x,p.y-player.y)<p.r+player.r){
+      if(p.t==='hp'){ player.hp=clamp(player.hp+p.val,0,100); }
+      else{
+        player.ammoPool+=p.val;
+        if(player.ammo===0 && player.reload<=0){ const need=player.ammoMax-player.ammo, take=Math.min(need,player.ammoPool); player.ammo+=take; player.ammoPool-=take; }
+      }
+      p.dead=true; puff(p.x,p.y);
+    }
+  }
+  W.pickups=W.pickups.filter(p=>!p.dead);
+
+  // портал
+  if(!W.portal && W.enemies.length===0){ openPortal(); }
+  if(W.portal){
+    W.portal.t+=dt;
+    if(Math.hypot(W.portal.x-player.x,W.portal.y-player.y) < W.portal.r + player.r + 6){ sfxPortal(); running=false; setTimeout(()=>nextStage(),180); return; }
+  }
+
+  // СМЕРТЬ ИГРОКА
+  if(player.hp<=0){
+    player.hp=0;
+    running=false; // цикл остановится на следующем кадре, появится оверлей в render()
+  }
+
+  drawParts(dt);
+
+  // UI
+  UI.hp.textContent = Math.max(0,player.hp|0);
+  UI.ammo.textContent = player.ammo;
+  UI.pool.textContent = player.ammoPool;
+}
+
+/* ===== Shooting ===== */
+let lastShot=0;
+function shoot(){
+  const now=performance.now(); if(now-lastShot<90) return; lastShot=now;
+  const dx=mouse.x-player.x, dy=mouse.y-player.y, ang=Math.atan2(dy,dx)+R(-0.06,0.06);
+  const sp=8.8, off=player.r+8; const vx=Math.cos(ang)*sp, vy=Math.sin(ang)*sp;
+  const sx=player.x+Math.cos(ang)*off, sy=player.y+Math.sin(ang)*off;
+  W.bullets.push({x:sx,y:sy,vx,vy,dmg:30}); player.ammo=Math.max(0,player.ammo-1); sfxShot();
+}
+
+/* ===== Render ===== */
+function render(){
+  x.fillStyle='#0b0f14'; x.fillRect(0,0,W.w,W.h);
+  // сетка
+  x.globalAlpha=.07; x.strokeStyle='#fff';
+  for(let i=32;i<W.w;i+=32){ x.beginPath(); x.moveTo(i,0); x.lineTo(i,W.h); x.stroke(); }
+  for(let j=32;j<W.h;j+=32){ x.beginPath(); x.moveTo(0,j); x.lineTo(W.w,j); x.stroke(); }
+  x.globalAlpha=1;
+
+  x.fillStyle='#161b22'; for(const w of W.walls){ x.fillRect(w.x,w.y,w.w,w.h); }
+
+  if(W.portal){
+    const p=W.portal, R0=16+Math.sin(p.t*4)*4;
+    const g=x.createRadialGradient(p.x,p.y,4,p.x,p.y,R0+18);
+    g.addColorStop(0,'#6ff'); g.addColorStop(1,'#06a');
+    x.fillStyle=g; x.beginPath(); x.arc(p.x,p.y,R0+18,0,Math.PI*2); x.fill();
+  }
+
+  for(const p of W.pickups){
+    if(p.t==='hp'){ x.fillStyle='#2ecc71'; x.beginPath(); x.arc(p.x,p.y,p.r,0,Math.PI*2); x.fill(); x.fillStyle='#fff'; x.fillRect(p.x-2,p.y-6,4,12); x.fillRect(p.x-6,p.y-2,12,4); }
+    else { x.fillStyle='#f1c40f'; x.beginPath(); x.arc(p.x,p.y,p.r,0,Math.PI*2); x.fill(); x.fillStyle='#0008'; x.fillRect(p.x-6,p.y-2,12,4); }
+  }
+
+  for(const e of W.enemies){
+    x.fillStyle='#c0392b'; x.beginPath(); x.arc(e.x,e.y,e.r,0,Math.PI*2); x.fill();
+    x.fillStyle='#fff'; x.fillRect(e.x-4,e.y-3,3,3); x.fillRect(e.x+1,e.y-3,3,3);
+  }
+
+  x.fillStyle='#ffd966'; for(const b of W.bullets){ x.beginPath(); x.arc(b.x,b.y,3,0,Math.PI*2); x.fill(); }
+
+  const ang=Math.atan2(mouse.y-player.y, mouse.x-player.x);
+  x.save(); x.translate(player.x,player.y);
+  x.fillStyle='#0006'; x.beginPath(); x.ellipse(0,player.r,player.r*0.8,player.r*0.4,0,0,Math.PI*2); x.fill();
+  x.fillStyle='#6cc24a'; x.beginPath(); x.arc(0,0,player.r,0,Math.PI*2); x.fill();
+  x.rotate(ang); x.fillStyle='#ddd'; x.fillRect(6,-3,12,6); x.restore();
+
+  /* Оверлей смерти */
+  if(!running && player && player.hp<=0){
+    x.fillStyle='#0009'; x.fillRect(0,0,W.w,W.h);
+    x.fillStyle='#fff'; x.font='28px system-ui,Segoe UI,Inter,Arial';
+    x.fillText('Ты погиб. Нажми «Рестарт».', 20, 40);
+  }
+}
+
+/* ===== Buttons ===== */
+btnStart.onclick=()=>{ btnStart.disabled=true; startGame(); };
+btnRestart.onclick=()=>{ btnStart.disabled=false; startGame(); };
+
+/* ===== Boot ===== */
+(function boot(){ try{ resetPlayer(); makeArena(); render(); }catch(e){ console.error(e); alert('Ошибка запуска: '+e.message); }})();
+</script>
+</body>
+</html>

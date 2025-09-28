@@ -127,3 +127,130 @@ body{
 #armedOverlay .hud.fire{ display:none; }
 /* если нужно приподнять вспышку над панелью:
    #armedOverlay .hud.fire{ bottom:40px; } */
+
+#discoBall{
+  position:fixed; top:-220px; left:50%; transform:translateX(-50%);
+  width:140px; opacity:0; pointer-events:none; z-index:9999;
+  filter: drop-shadow(0 10px 24px rgba(0,0,0,.5));
+  transition: top 1s cubic-bezier(.2,.9,.2,1), opacity .6s;
+}
+body.disco #discoBall{ top:72px; opacity:1; }
+
+
+/* фон под картинку кота-диджея */
+body.disco{
+  --bg-url: url('assets/dj_cat.jpg'); /* ← поставь свой путь при желании */
+  background-image: var(--bg-url), radial-gradient(1000px 600px at 50% 10%, rgba(255,255,255,.06), transparent 60%);
+  background-size: cover, auto;
+  background-attachment: fixed;
+  background-position: center top;
+}
+
+
+/* «танец» только для кнопок в верхней панели, остальное не трогаем */
+.toolbar .btn{ transition: transform .12s ease; }
+body.disco .toolbar .btn{
+  animation: disco-dance var(--beat,.5s) infinite ease-in-out;
+}
+body.disco .toolbar .btn:nth-child(odd){ animation-delay: calc(var(--beat)/2); }
+
+
+@keyframes disco-dance{
+  0%   { transform: translateY(0) rotate(0deg) }
+  25%  { transform: translateY(-4px) rotate(-2deg) scale(1.02) }
+  50%  { transform: translateY(0) rotate(0deg) }
+  75%  { transform: translateY(-4px) rotate(2deg)  scale(1.02) }
+  100% { transform: translateY(0) rotate(0deg) }
+}
+
+/* === DISCO BACKDROP (фикс слоёв) === */
+body{ position: relative; }                /* создаём стек для z-index */
+
+
+body.disco{ background-color:#000; }       /* подложка, можно оставить */
+
+
+body.disco::before{
+  content:"";
+  position:fixed;
+  inset:0;
+  z-index:0;                               /* было -1 — из-за этого и не видно */
+  background: url("assets/dj_cat.jpg") center / cover no-repeat;  /* твоя картинка */
+  /* запасной вариант на всякий случай:
+  /* background: url("https://picsum.photos/1600/900") center/cover no-repeat; */
+  opacity:1;
+  pointer-events:none;
+}
+
+
+/* поднимаем основной контент над фоном */
+.header, .wrap, .footer { position: relative; z-index: 1; }
+
+/* ==== DISCO PATCH v2: прозрачные кнопки + удар в бас ==== */
+body.disco .toolbar .btn{
+  background: transparent !important;
+  border-color: rgba(255,255,255,.25) !important;
+  color: #fff !important;
+  box-shadow: 0 0 0 rgba(0,0,0,0);
+  backdrop-filter: blur(2px);
+  /* амплитуда с JS: 0..1 */
+  --amp: 0;
+  transform-origin: center bottom;
+  /* базовый подпрыг для «ридма», длительность = var(--beat) */
+  animation: disco-bounce var(--beat, .5s) infinite ease-in-out;
+}
+
+/* чуть разная фаза, чтобы не синхронно */
+body.disco .toolbar .btn:nth-child(odd){ animation-delay: calc(var(--beat)/2); }
+
+@keyframes disco-bounce{
+  0%   { transform: translateY(0) rotate(0deg) scale(1); }
+  20%  { transform: translateY(-4px) rotate(-2deg) scale(1.02); }
+  50%  { transform: translateY(0) rotate(0deg) }
+  80%  { transform: translateY(-3px) rotate(2deg)  scale(1.01); }
+  100% { transform: translateY(0) rotate(0deg) }
+}
+
+/* ДОБАВИТЕЛЬНО: мгновенный «удар» от амплитуды (из JS) — сильнее трясём */
+body.disco .toolbar .btn{
+  /* умножаем амплитуду на силу — можно увеличить 10→14 для ещё мощнее */
+  --kick: clamp(0, var(--amp), 1);
+  /* суммарный трансформ = базовый bounce из keyframes + «всплеск» от баса */
+  /* современные браузеры складывают трансформы: используем filter как вспышку */
+  filter: drop-shadow(0 0 calc(8px * var(--kick)) rgba(255,255,255,.35));
+  /* «дрожь» в удар: добавка к transform через CSS vars невозможна, поэтому основной толчок даёт JS (ниже) */
+}
+
+/* ==== DISCO PATCH v3 (сильнее и прозрачные кнопки) ==== */
+body.disco #armedToggle,
+body.disco #mysteryBtn {
+  background: transparent !important;
+  color: #fff !important;
+  border-color: rgba(255,255,255,.35) !important;
+  box-shadow: none !important;
+  backdrop-filter: blur(2px);
+}
+
+
+/* если кнопки не внутри .toolbar — всё равно сработает по ID */
+body.disco .toolbar .btn {
+  /* базовый подпрыг по BPM */
+  animation: disco-bounce var(--beat, .5s) infinite ease-in-out !important;
+}
+
+
+@keyframes disco-bounce{
+  0%   { transform: translateY(0) rotate(0deg) }
+  20%  { transform: translateY(-6px) rotate(-3deg) scale(1.03) }
+  50%  { transform: translateY(0) rotate(0deg) }
+  80%  { transform: translateY(-5px) rotate(3deg)  scale(1.02) }
+  100% { transform: translateY(0) rotate(0deg) }
+}
+
+
+/* переменная амплитуды приходит из JS: 0..1 — усиливаем свечение */
+body.disco #armedToggle,
+body.disco #mysteryBtn {
+  --amp: 0;
+  filter: drop-shadow(0 0 calc(14px * var(--amp)) rgba(255,255,255,.45));
+}

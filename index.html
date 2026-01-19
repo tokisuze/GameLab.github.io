@@ -1,215 +1,78 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="ru">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Arcade Lab (stable)</title>
-  <link rel="stylesheet" href="assets/styles.css">
-</head>
-<body>
-<header class="header">
-  <div class="container header-inner">
-    <div class="brand">🎮 Arcade Lab (stable)</div>
-    <div class="spacer"></div>
-    <button class="btn" id="armedToggle" type="button">🔫 Armed Mode</button>
-    <button class="btn" id="mysteryBtn" type="button">❓ Mystery</button>
-  </div>
-</header>
-
-<img id="discoBall" src="assets/disco_ball.png" alt="" aria-hidden="true" />
-
-<div id="armedBanner">Armed Mode включён. Esc/Q/ПКМ — выход.</div>
-<div id="musicStatus" aria-live="polite">Music: OFF</div>
-
-<main class="container">
-  <p style="color:var(--muted)"></p>
-  <div class="grid">
-    <!-- было -->
-    <article class="card">
-      <h3>Reaction Test</h3>
-      <p>Кликни, когда поле станет зелёным.</p>
-      <div class="actions"><a class="btn" href="games/reaction.html">Играть</a></div>
-    </article>
-    <article class="card">
-      <h3>Snake</h3>
-      <p>Классика — собери яблоки.</p>
-      <div class="actions"><a class="btn" href="games/snake.html">Играть</a></div>
-    </article>
-    <article class="card">
-      <h3>Pong vs CPU</h3>
-      <p>Отбивай мяч и обыграй компьютер.</p>
-      <div class="actions"><a class="btn" href="games/pong.html">Играть</a></div>
-    </article>
-
-    <!-- добавил -->
-    <article class="card">
-      <h3>Mini DOOM</h3>
-      <p>Шар, стены, враги, портал на следующий уровень.</p>
-      <div class="actions"><a class="btn" href="games/minidoom.html">Играть</a></div>
-    </article>
-
-    <article class="card">
-      <h3>Duck Hunt mini</h3>
-      <p>Стреляй по уткам. Патроны = количеству уток в раунде.</p>
-      <div class="actions"><a class="btn" href="games/ducks.html">Играть</a></div>
-    </article>
-
-    <article class="card">
-      <h3>Dodge (1–2 игрока)</h3>
-      <p>Уворачивайся от снарядов. WASD и стрелки. Счётчик рекордов.</p>
-      <div class="actions"><a class="btn" href="games/dodge.html">Играть</a></div>
-    </article>
-
-    <article class="card">
-      <h3>GeoDash — mini (slow)</h3>
-      <p>Замедленный джамп-раннер с шипами, ямами и платформами.</p>
-      <div class="actions"><a class="btn" href="games/geodash.html">Играть</a></div>
-    </article>
-  </div>
-</main>
-
-<!-- ===== Promo (friends) START ===== -->
-<section id="demo-ads" style="margin:24px 0">
-  <div style="display:flex;gap:12px;align-items:center;margin-bottom:10px">
-    <strong>🔗 Работы друзей</strong>
-    <span style="margin-left:auto;font-size:12px;color:#9aa2ad">Подбор меняется ежедневно</span>
-  </div>
-
-
-  <div id="ads-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px"></div>
-  <div id="ads-rotator" style="margin-top:12px;position:relative;height:110px;border:1px solid #2a3947;border-radius:12px;overflow:hidden;background:#0f1720"></div>
-</section>
-
-
-<script>
-(() => {
-  /* ===== настройки ===== */
-  const GRID_SLOTS = 4;           // сколько карточек в сетке
-  const ROTATE_EVERY_MS = 6000;   // автосмена слайда карусели
-  const SELECTION_MODE = 'daily'; // 'daily' (фикс на сутки) или 'refresh'
-
-
-  /* ===== список работ ===== */
-  const ITEMS = [
-    { id:'k1', title:'У МЕНЯ ТВОЙ НОСИК', text:'АХХААХАХАХАХАХ', emoji:'🎮', url:'https://example.com/artem', bg:'assets/photo_2025-05-30_20-04-34.jpg' },
-    { id:'k2', title:'ЛЯ ПАСЬОН', text:'НУ И ГНИДА ТЫ ДЕКСТЕР', emoji:'🎨', url:'https://example.com/masha', bg:'assets/logo.png' },
-    { id:'k3', title:'ВОТ ЭТО КОМБО', text:'АХХААХАХАХ', emoji:'🧮', url:'https://example.com/dima', bg:'assets/photo_2025-08-01_20-46-31 (1).jpg' },
-    { id:'k4', title:'Гад дем фак', text:'пить гулять', emoji:'🧩', url:'https://example.com/ira', bg:'assets/photo_2025-08-02_13-49-01.jpg' }
-    // ...добавь остальных (до 20+), каждому укажи bg
-  ];
-
-
-  const grid = document.getElementById('ads-grid');
-  const rot  = document.getElementById('ads-rotator');
-
-
-  /* ===== выбор без повторов ===== */
-  function seedForToday(){
-    const d=new Date(), k=`${d.getUTCFullYear()}${d.getUTCMonth()+1}${d.getUTCDate()}`;
-    let s=0; for(let i=0;i<k.length;i++) s=(s*131 + k.charCodeAt(i))>>>0;
-    return s||1;
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>UNDERTALE Web</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap" rel="stylesheet">
+    <style>
+      body {
+        background-color: #000;
+        margin: 0;
+        overflow: hidden;
+        user-select: none;
+      }
+      /* Custom Font Classes to match Tailwind utility patterns if needed, though we use arbitrary values mostly */
+      .font-8bit {
+        font-family: 'Press Start 2P', cursive;
+      }
+      .font-dialogue {
+        font-family: 'VT323', monospace;
+      }
+      /* CRT Scanline effect (subtle) */
+      .scanlines {
+        background: linear-gradient(
+          to bottom,
+          rgba(255,255,255,0),
+          rgba(255,255,255,0) 50%,
+          rgba(0,0,0,0.1) 50%,
+          rgba(0,0,0,0.1)
+        );
+        background-size: 100% 4px;
+        position: absolute;
+        top: 0; left: 0; right: 0; bottom: 0;
+        pointer-events: none;
+        z-index: 50;
+      }
+      /* Pixel art rendering crispness */
+      canvas, img, svg {
+        image-rendering: pixelated;
+        image-rendering: crisp-edges;
+      }
+      @keyframes shake {
+        0% { transform: translate(1px, 1px) rotate(0deg); }
+        10% { transform: translate(-1px, -2px) rotate(-1deg); }
+        20% { transform: translate(-3px, 0px) rotate(1deg); }
+        30% { transform: translate(3px, 2px) rotate(0deg); }
+        40% { transform: translate(1px, -1px) rotate(1deg); }
+        50% { transform: translate(-1px, 2px) rotate(-1deg); }
+        60% { transform: translate(-3px, 1px) rotate(0deg); }
+        70% { transform: translate(3px, 1px) rotate(-1deg); }
+        80% { transform: translate(-1px, -1px) rotate(1deg); }
+        90% { transform: translate(1px, 2px) rotate(0deg); }
+        100% { transform: translate(1px, -2px) rotate(-1deg); }
+      }
+      .shake {
+        animation: shake 0.5s;
+        animation-iteration-count: 1;
+      }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@^19.2.3",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "react/": "https://esm.sh/react@^19.2.3/"
   }
-  function rng(seed){ let s=seed>>>0||1; return ()=> (s=(s*1664525+1013904223)>>>0)/2**32; }
-  function pickUnique(arr, n, rnd=Math.random){
-    const taken=new Set(), out=[];
-    while(out.length<n && taken.size<arr.length){
-      const i=Math.floor(rnd()*arr.length);
-      if(!taken.has(i)){ taken.add(i); out.push(arr[i]); }
-    }
-    return out;
-  }
-
-
-  const rand = (SELECTION_MODE==='daily') ? rng(seedForToday()) : Math.random;
-  const gridItems = pickUnique(ITEMS, Math.min(GRID_SLOTS, ITEMS.length), rand);
-  const rest      = ITEMS.filter(x => !gridItems.includes(x));
-  const rotItems  = pickUnique(rest.length?rest:ITEMS, Math.min(8, rest.length||ITEMS.length), rand);
-
-
-  /* ===== рендер сетки ===== */
-  function renderGrid(items){
-    grid.innerHTML = items.map(i => `
-      <article data-id="${i.id}" style="
-        background:url('${i.bg||''}') center/cover no-repeat, #0f1720;
-        border:1px solid #23303a;
-        padding:12px;
-        border-radius:12px;
-        display:flex;
-        flex-direction:column;
-        gap:10px;
-        min-height:160px;
-        color:#fff;
-      ">
-        <div style="display:flex;gap:10px;align-items:center;background:rgba(0,0,0,0.5);padding:4px 6px;border-radius:8px;">
-          <div style="width:40px;height:40px;border-radius:8px;background:#17202a;
-                      display:flex;align-items:center;justify-content:center;font-size:20px">
-            ${i.emoji}
-          </div>
-          <div>
-            <div style="font-weight:700;color:#fff">${esc(i.title)}</div>
-          </div>
-        </div>
-        <div style="color:#fff;font-size:13px;flex:1;background:rgba(0,0,0,0.4);padding:4px 6px;border-radius:6px;">${esc(i.text)}</div>
-        <div style="display:flex;gap:8px;align-items:center">
-          <a class="open-link" data-id="${i.id}" href="${escAttr(i.url)}" 
-             target="_blank" rel="noopener noreferrer"
-             style="background:linear-gradient(180deg,#2ea1bf,#1c7d95);color:#fff;
-                    padding:8px 10px;border:none;border-radius:8px;
-                    cursor:pointer;text-decoration:none">
-            Посмотреть
-          </a>
-        </div>
-      </article>
-    `).join('');
-  }
-
-
-  /* ===== карусель ===== */
-  let idx = 0;
-  function renderSlide(){
-    const i = rotItems[idx % rotItems.length]; idx++;
-    rot.innerHTML = `
-      <div style="position:absolute;inset:0;display:flex;gap:12px;align-items:center;padding:12px;
-                  background:url('${i.bg||''}') center/cover no-repeat, #0f1720;">
-        <div style="width:64px;height:64px;border-radius:12px;background:rgba(0,0,0,0.5);
-                    display:flex;align-items:center;justify-content:center;font-size:28px">${i.emoji}</div>
-        <div style="min-width:0;background:rgba(0,0,0,0.5);padding:6px 10px;border-radius:8px">
-          <div style="font-weight:700;color:#fff">${esc(i.title)}</div>
-          <div style="color:#ddd;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(i.text)}</div>
-          <div style="margin-top:6px">
-            <a class="open-link" data-id="${i.id}" href="${escAttr(i.url)}" target="_blank" rel="noopener noreferrer"
-               style="background:#273549;color:#cfe7ff;border:1px solid #365066;padding:6px 10px;border-radius:8px;cursor:pointer;text-decoration:none">Подробнее</a>
-          </div>
-        </div>
-      </div>`;
-  }
-
-
-  /* ===== init ===== */
-  renderGrid(gridItems);
-  renderSlide();
-  setInterval(renderSlide, ROTATE_EVERY_MS);
-
-
-  /* helpers */
-  function esc(s){return (s+'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
-  function escAttr(s){return esc(s).replace(/"/g,'&quot;');}
-})();
+}
 </script>
-<!-- ===== Promo (friends) END ===== -->
-
-<footer class="footer">© Arcade Lab.</footer>
-
-<!-- Overlay для Armed Mode -->
-<div id="armedOverlay" aria-hidden="true">
-  <div id="cross"></div>
-
-  <!-- DOOM HUD: положи файлы в /assets/ с такими именами -->
-  <img id="doomHud"  class="hud"      src="assets/doom_idle.png" alt="">
-  <img id="doomFire" class="hud fire" src="assets/doom_fire.png"  alt="">
-</div>
-
-<script src="assets/clean.js"></script>
-<script src="assets/armed.js"></script>
+<link rel="stylesheet" href="/index.css">
+</head>
+  <body>
+    <div id="root"></div>
+  <script type="module" src="/index.tsx"></script>
 </body>
 </html>
